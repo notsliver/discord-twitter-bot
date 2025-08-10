@@ -1,0 +1,22 @@
+{
+  "name": "discord-twitter-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "author": "SLIVER",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "register": "node register-commands.js",
+    "register:global": "node register-commands.js --global",
+    "register:global:remove": "node register-commands.js --globalremove",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.1",
+    "mongoose": "^8.17.1"
+  }
+}
