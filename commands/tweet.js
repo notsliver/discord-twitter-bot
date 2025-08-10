@@ -217,7 +217,7 @@ module.exports.execute = async (interaction) => {
     await interaction.editReply({ content: `Posted in https://discord.com/channels/${interaction.guildId}/${resolvedThreadId}` });
   } catch (err) {
     console.error('Error in /post:', err);
-    const replyPayload = { content: 'An unexpected error occurred while creating your post.', ephemeral: true };
+    const replyPayload = { content: 'An unexpected error occurred while creating your post.', flags: 64 };
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply(replyPayload);

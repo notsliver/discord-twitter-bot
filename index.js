@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Events, Collection, InteractionType, ChannelType, ActionRowBuilder, ChannelSelectMenuBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, WebhookClient } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events, Collection, InteractionType, ChannelType, ActionRowBuilder, ChannelSelectMenuBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, WebhookClient, REST, Routes } = require('discord.js');
 const mongoose = require('mongoose');
 const path = require('path');
 const { loadSlashCommands } = require('./commandLoader');
@@ -33,15 +33,46 @@ function createDiscordClient() {
   });
 }
 
+process.on('unhandledRejection', (reason) => {
+  try {
+    console.error('[Process] Unhandled rejection:', reason);
+  } catch {}
+});
+
 async function start() {
   await connectToDatabase(MONGODB_URI);
 
   const client = createDiscordClient();
-  const { commands } = loadSlashCommands(path.join(__dirname, 'commands'));
+  const { commands, jsonData } = loadSlashCommands(path.join(__dirname, 'commands'));
   client.commands = new Collection(commands);
 
-  client.once(Events.ClientReady, (c) => {
+  client.once(Events.ClientReady, async (c) => {
     console.log(`[Bot] Logged in as ${c.user.tag}`);
+    // Register slash commands on startup (guild if GUILD_ID is set, else global)
+    try {
+      const CLIENT_ID = process.env.CLIENT_ID;
+      const GUILD_ID = process.env.GUILD_ID;
+      if (!CLIENT_ID) {
+        console.warn('[Bot] CLIENT_ID not set; skipping command registration.');
+      } else {
+        const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
+        if (GUILD_ID) {
+          console.log(`[Bot] Registering ${jsonData.length} commands for guild ${GUILD_ID}...`);
+          await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: jsonData });
+          console.log('[Bot] Guild commands registered.');
+        } else {
+          console.log(`[Bot] Registering ${jsonData.length} global commands...`);
+          await rest.put(Routes.applicationCommands(CLIENT_ID), { body: jsonData });
+          console.log('[Bot] Global commands registered.');
+        }
+      }
+    } catch (e) {
+      console.error('[Bot] Failed to register commands:', e?.message || e);
+    }
+  });
+
+  client.on('error', (err) => {
+    try { console.error('[Client] Error event:', err); } catch {}
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -86,12 +117,23 @@ async function start() {
         const Profile = require('./models/Profile');
         const Organization = require('./models/Organization');
         const profiles = await Profile.find({ guildId: interaction.guildId, userId: interaction.user.id }).limit(25);
-        const orgs = await Organization.find({ guildId: interaction.guildId, ownerUserId: interaction.user.id }).limit(25);
+        const orgs = await Organization.find({
+          guildId: interaction.guildId,
+          $or: [
+            { ownerUserId: interaction.user.id },
+            { adminUserIds: interaction.user.id },
+            { posterUserIds: interaction.user.id },
+          ],
+        }).limit(25);
 
         const options = [
           ...profiles.map((p) => ({ label: `Profile: @${p.handle}`, value: `p:${p.id}` })),
           ...orgs.map((o) => ({ label: `Org: @${o.handler}`, value: `o:${o.id}` })),
         ];
+        if (options.length === 0) {
+          await interaction.reply({ content: 'No eligible accounts to reply as. Create a profile with /account register or ask an org owner to add you as poster/admin.', ephemeral: true });
+          return;
+        }
         let parentHandle = replyToHandle || 'thread';
         if (!parentHandle) {
           try {
@@ -100,9 +142,13 @@ async function start() {
             if (parent?.handle) parentHandle = parent.handle;
           } catch {}
         }
-        const menu = new StringSelectMenuBuilder().setCustomId(`post:reply:target:${postId}:${parentHandle}`).setPlaceholder('Reply as...').addOptions(options.slice(0, 25));
+        const menu = new StringSelectMenuBuilder().setCustomId(`post:reply:target:${postId}:${parentHandle}`).setPlaceholder('Reply as...');
+
+        const limited = options.slice(0, 25);
+        for (const opt of limited) menu.addOptions(opt);
         const row = new ActionRowBuilder().addComponents(menu);
-        return interaction.reply({ content: 'Choose an identity to reply as:', components: [row], ephemeral: true });
+        await interaction.reply({ content: 'Choose an identity to reply as:', components: [row], flags: 64 });
+        return;
       }
 
       if (interaction.isStringSelectMenu() && interaction.customId.startsWith('post:reply:target:')) {
@@ -113,7 +159,10 @@ async function start() {
         const [kind, id] = selection.split(':');
         const key = `${interaction.guildId}:${interaction.user.id}:${postId}`;
         const draft = pendingReplies.get(key);
-        if (!draft) return interaction.reply({ content: 'Reply expired. Try again.', ephemeral: true });
+        if (!draft) {
+          try { await interaction.reply({ content: 'Reply expired. Try again.', ephemeral: true }); } catch {}
+          return;
+        }
 
         const Post = require('./models/Post');
         const post = await Post.findById(postId);
@@ -163,11 +212,16 @@ async function start() {
           });
           const file = new AttachmentBuilder(png, { name: 'reply.png' });
           const header = `**${displayName}**\n-# @${handleText || replyHandle}`;
-          const sent = await thread.send({
-            files: [file],
-            reply: { messageReference: draft.replyToMessageId || post.messageId, failIfNotExists: false },
-            allowedMentions: { parse: [] },
-          });
+          let sent = null;
+          try {
+            sent = await thread.send({
+              files: [file],
+              reply: { messageReference: draft.replyToMessageId || post.messageId, failIfNotExists: false },
+              allowedMentions: { parse: [] },
+            });
+          } catch (e) {
+            console.error('Failed to send reply into thread:', e);
+          }
           const replyRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`post:reply:${post.id}:${handleText || replyHandle}:${sent?.id || draft.replyToMessageId || post.messageId}`).setLabel('Reply').setStyle(ButtonStyle.Secondary)
           );
@@ -177,11 +231,13 @@ async function start() {
           } catch {}
           post.commentsCount += 1;
           await post.save();
-        } catch {
-          return interaction.reply({ content: 'Failed to post comment.', ephemeral: true });
+        } catch (e) {
+          console.error('Failed to generate/send reply:', e);
+          try { await interaction.reply({ content: 'Failed to post comment.', ephemeral: true }); } catch {}
+          return;
         }
 
-        await interaction.update({ content: 'Reply posted.' });
+        try { await interaction.update({ content: 'Reply posted.' }); } catch {}
         pendingReplies.delete(key);
         return;
       }

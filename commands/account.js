@@ -211,7 +211,8 @@ async function handleEdit(interaction) {
       new ButtonBuilder().setCustomId(`account:edit:profileimg:${kind}:${id}`).setLabel('Edit Profile Image').setStyle(ButtonStyle.Secondary)
     );
 
-    const msg = await interaction.reply({ embeds: [embed], files: [{ attachment: png, name: 'example.png' }], components: [row], ephemeral: true, fetchReply: true });
+    await interaction.reply({ embeds: [embed], files: [{ attachment: png, name: 'example.png' }], components: [row], flags: 64 });
+    const msg = await interaction.fetchReply();
 
     const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60_000 });
     collector.on('collect', async (i) => {
