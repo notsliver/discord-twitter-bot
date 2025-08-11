@@ -151,6 +151,81 @@ async function start() {
         return;
       }
 
+      if (interaction.isModalSubmit() && interaction.customId.startsWith('account:edit:')) {
+        try {
+          await interaction.deferReply({ flags: 64 });
+          const id = interaction.customId; // account:edit:username|profileimg:<kind>:<id>
+          const parts = id.split(':');
+          const action = parts[2];
+          const kind = parts[3];
+          const docId = parts[4];
+
+          const Profile = require('./models/Profile');
+          const Organization = require('./models/Organization');
+
+          if (action === 'username') {
+            const newUsername = (interaction.fields.getTextInputValue('username') || '').trim();
+            if (!newUsername || newUsername.includes('@') || /\s/.test(newUsername) || newUsername.length < 2 || newUsername.length > 64) {
+              await interaction.editReply({ content: 'Invalid username.' });
+              return;
+            }
+            if (kind === 'p') {
+              const doc = await Profile.findById(docId);
+              if (!doc || doc.guildId !== interaction.guildId) { await interaction.editReply({ content: 'Not found.' }); return; }
+              if (doc.userId !== interaction.user.id) { await interaction.editReply({ content: 'You do not own this profile.' }); return; }
+              doc.username = newUsername;
+              await doc.save();
+              await interaction.editReply({ content: 'Username updated.' });
+              return;
+            } else if (kind === 'o') {
+              const doc = await Organization.findById(docId);
+              if (!doc || doc.guildId !== interaction.guildId) { await interaction.editReply({ content: 'Not found.' }); return; }
+              const isOwner = doc.ownerUserId === interaction.user.id;
+              const isAdmin = doc.adminUserIds.includes(interaction.user.id);
+              if (!isOwner && !isAdmin) { await interaction.editReply({ content: 'You are not allowed to edit this organization.' }); return; }
+              doc.username = newUsername;
+              await doc.save();
+              await interaction.editReply({ content: 'Username updated.' });
+              return;
+            }
+          }
+
+          if (action === 'profileimg') {
+            const raw = (interaction.fields.getTextInputValue('image') || '').trim();
+            const finalUrl = raw.length === 0 ? null : raw;
+            if (finalUrl && !/^https?:\/\//i.test(finalUrl)) {
+              await interaction.editReply({ content: 'Image must be a valid URL or leave blank to clear.' });
+              return;
+            }
+            if (kind === 'p') {
+              const doc = await Profile.findById(docId);
+              if (!doc || doc.guildId !== interaction.guildId) { await interaction.editReply({ content: 'Not found.' }); return; }
+              if (doc.userId !== interaction.user.id) { await interaction.editReply({ content: 'You do not own this profile.' }); return; }
+              doc.profileImageUrl = finalUrl;
+              await doc.save();
+              await interaction.editReply({ content: 'Profile image updated.' });
+              return;
+            } else if (kind === 'o') {
+              const doc = await Organization.findById(docId);
+              if (!doc || doc.guildId !== interaction.guildId) { await interaction.editReply({ content: 'Not found.' }); return; }
+              const isOwner = doc.ownerUserId === interaction.user.id;
+              const isAdmin = doc.adminUserIds.includes(interaction.user.id);
+              if (!isOwner && !isAdmin) { await interaction.editReply({ content: 'You are not allowed to edit this organization.' }); return; }
+              doc.profileImageUrl = finalUrl;
+              await doc.save();
+              await interaction.editReply({ content: 'Profile image updated.' });
+              return;
+            }
+          }
+
+          await interaction.editReply({ content: 'Unknown edit action.' });
+        } catch (e) {
+          console.error('account edit modal error:', e);
+          try { await interaction.editReply({ content: 'Failed to update.' }); } catch {}
+        }
+        return;
+      }
+
       if (interaction.isStringSelectMenu() && interaction.customId.startsWith('post:reply:target:')) {
         const parts = interaction.customId.split(':');
         const postId = parts[3];
